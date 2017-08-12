@@ -26,7 +26,7 @@ import slight_fimulator
 | Bank right                   | →              |
 | Set throttle to OFF          | F1             |
 | Decrease throttle            | F2             |
-| Set throttle to 50%          | F3             |
+| Set throttle to 25%          | F3             |
 | Increase throttle            | F4             |
-| Set throttle to FULL         | F5             |
+| Set throttle to 75%          | F5             |
 | Center controls and throttle | Z              |
