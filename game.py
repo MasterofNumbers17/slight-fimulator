@@ -1,10 +1,34 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 
-"""The main game code"""
+"""The main game code
 
-# Installs Python 3 division behaviour
-##from __future__ import division
+Slight Fimulator - Flight simlator in Python
+Copyright (C) 2017 Hao Tian
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+ALTERNATE NAMES
+Glide Slope
+Departure As Filed
+Hundred Above
+Decision Height
+Dank Angle
+Dlight simulator
+SLOGAN
+Just a bit of fimulating
+"""
+
+# Installs Python 3 division and print behaviour
+from __future__ import division, print_function
 
 import datetime
 import math
@@ -25,23 +49,24 @@ class Airplane(utils.ImprovedSprite):
     """The class for an airplane sprite."""
     NEXT_ID = 0
     def __init__(self, image, x=(0, 0, 0), y=None, altitude=None,
-            speed=250, throttle=50, player_id=None, airspace_dim=[700, 700]):
+            speed=0, throttle=0, player_id=None, airspace_dim=[700, 700]):
         """Initializes the instance."""
         if y == None and altitude != None: x, y = x
         elif y == None: x, y, altitude = x
         super(Airplane, self).__init__(image, x, y)
         self.pos = list(self.rect.center)
         self.upos = self.pos[:]
-        self.upos[0] *= (1000.0/airspace_dim[0])
-        self.upos[1] *= (1000.0/airspace_dim[1])
+        self.upos[0] *= (1000/airspace_dim[0])
+        self.upos[1] *= (1000/airspace_dim[1])
         self.altitude = altitude
         self.heading = 0
-        self.vertical_heading = 0
+        self.pitch = 0
         self.speed = speed # m/s
         self.horizontal_velocity = speed
         self.vertical_velocity = 0
         self.gravity = 0
-        self.total_gravity = 0
+        self.gravity_force = 100
+        self.max_vert_roll = 0
         self.throttle = throttle
         self.acceleration = 0 # m/s^2
         self.roll_level = 0
@@ -71,8 +96,8 @@ class Airplane(utils.ImprovedSprite):
         """Updates the plane."""
         if window.fps == 0: window.fps = window.max_fps
         # calculate display stretch
-        x_str = window.airspace.width / 1000.0
-        y_str = window.airspace.height / 1000.0
+        x_str = window.airspace.width / AIRSPACE_DIM
+        y_str = window.airspace.height / AIRSPACE_DIM
 
         # initialize damage
         damage = 0
@@ -80,34 +105,43 @@ class Airplane(utils.ImprovedSprite):
         # move the plane
         self.roll = self.get_roll(self.roll_level)
         self.heading += (self.roll / window.fps)
-        if self.heading < -180: self.heading += 360
-        elif self.heading > 180: self.heading -= 360
-        self.vertical_heading = self.get_vert_hd(self.vertical_roll_level)
+        if self.heading <= 0: self.heading += 360
+        elif self.heading > 360: self.heading -= 360
+        if self.vertical_roll_level > self.max_vert_roll:
+            self.vertical_roll_level = self.max_vert_roll
+        self.pitch = self.get_pitch(self.vertical_roll_level)
 
         # acceleration
-        self.acceleration = (self.throttle ** 2 / 250.0
-                - self.speed ** 2 / 6250.0)
-        self.speed += (self.acceleration / float(window.fps))
+        self.acceleration = (self.throttle ** 2 / 250
+                - self.speed ** 2 / 6250)
+        self.speed += (self.acceleration / window.fps)
         self.horizontal_speed = self.speed * math.cos(math.radians(
-                self.vertical_heading))
+                self.pitch))
         self.vertical_velocity = self.speed * math.sin(math.radians(
-                self.vertical_heading))
+                self.pitch))
 
-        # apply gravity if going too slow
-        if self.speed <= 150:
-            window.warnings['stall'] = True
-        self.gravity = (250 - self.speed) / 250.0 * 10
-        self.gravity -= 0
-        self.total_gravity += (self.gravity / window.fps)
-        if self.total_gravity < 0: self.total_gravity = 0
-        self.vertical_velocity -= self.total_gravity
+        # atall and gravity
+        if self.speed <= 100:
+            if not window.ignore_warnings:
+                window.warnings['stall'] = True
+            self.max_vert_roll = max((self.speed-50) / 12.5, 0)
+        else: self.max_vert_roll = 4
+        self.gravity_force += (((50 - self.speed) / 50 * 10)
+             - (self.gravity_force ** 2 / 1000))
+        if self.gravity_force < 0: self.gravity_force = 0
+        if self.altitude <= 0.1: self.gravity = 0
+        else: self.gravity = self.gravity_force
+        self.total_vertical_velocity = self.vertical_velocity - self.gravity
+        if self.total_vertical_velocity < -self.altitude:
+            self.total_vertical_velocity = -self.altitude
         
-        hspeed = self.horizontal_speed / float(window.fps) / 100
-        vspeed = self.vertical_velocity / float(window.fps) / 100
+        hspeed = self.horizontal_speed / window.fps
+        vspeed = self.total_vertical_velocity / window.fps
         self.pos[0] += math.sin(math.radians(self.heading)) * hspeed * x_str
         self.pos[1] -= math.cos(math.radians(self.heading)) * hspeed * y_str
         self.rect.center = tuple(self.pos)
         self.altitude += vspeed
+        if self.altitude < 0.1: self.altitude = 0
 
         # User-freindly coordinates
         # Goes from 0 to +1000 in both dimensions
@@ -116,22 +150,24 @@ class Airplane(utils.ImprovedSprite):
         self.upos[1] *= (1/y_str)
 
         # overspeed damage
-        if self.speed > 500:
+        if self.speed > 375:
             window.warnings['overspeed'] = True
-            damage += (self.speed - 500) ** 2 / 75000.0 / window.fps
+            damage += (self.speed - 375) ** 2 / 100000 / window.fps
 
         # height warnings
-        if self.altitude <= 500:
+        if self.altitude <= 500 and not window.ignore_warnings:
             window.warnings['pulluploop'] = True
             window.status = ["PRESS AND HOLD", "THE \"DOWN\" KEY!"]
         elif (self.altitude < 1000 and self.vertical_velocity > 0
-                and self.throttle < 50):
+                and self.throttle < 50) and not window.ignore_warnings:
             window.warnings['dontsinkloop'] = True
             window.status = ["Be careful not to stall."]
-        elif (self.altitude < 1000 and self.speed > 250):
+        elif (self.altitude < 1000 and self.speed > 250
+                and not window.ignore_warnings):
             window.warnings["terrainloop"] = True
-        elif (self.altitude < 1000 and self.speed <= 250):
-            window.warnings['pulluploop'] = True
+        elif (self.altitude < 1000 and self.speed <= 250
+                and not window.ignore_warnings):
+            window.warnings['pulluploop2'] = True
             window.status = ["DO NOT DESCEND!"]
         elif (abs(self.altitude - window.closest_objective.altitude)
                 <= ALTITUDE_WITHIN):
@@ -141,41 +177,48 @@ class Airplane(utils.ImprovedSprite):
                 window.warnings["altitude"] = True
                 self.within_objective_range = True
         # if we are outside objective altitude range
-        else:
+        elif not window.ignore_warnings:
             self.within_objective_range = False
             window.status = ["Fly to the objective."]
-
+        elif window.ignore_warnings == 1:
+            window.status = ["Fly up above 1000 m!"]
+            if self.altitude > 1000:
+                window.ignore_warnings = 0
         if abs(self.roll) >= 30:
             window.warnings['bankangle'] = True
 
         # disable loops
+        if self.altitude > 500:
+            window.warnings['pulluploop'] = False
         if not (self.altitude < 1000 and self.vertical_velocity > 0
                 and self.throttle < 50):
             window.warnings['dontsinkloop'] = False
         if not (self.altitude < 1000 and self.speed > 250):
             window.warnings["terrainloop"] = False
         if not (self.altitude < 1000 and self.speed <= 250):
-            window.warnings['pulluploop'] = False
+            window.warnings['pulluploop2'] = False
 
         # autopilot
         if self.ap_enabled:
-            self.roll_level *= (0.5 ** (1.0/window.fps))
-            self.vertical_roll_level *= (0.5 ** (1.0/window.fps))
-            self.throttle = 50 + (self.throttle-50) * (0.5 ** (1.0/window.fps))
-            if abs(self.roll_level) < 0.01:
+            self.roll_level *= (0.5 ** (1/window.fps))
+            self.vertical_roll_level *= (0.5 ** (1/window.fps))
+            self.throttle = 50 + (self.throttle-50) * (0.5 ** (1/window.fps))
+            window.status = ["Autopilot engaged..."]
+            if abs(self.roll_level) < 0.1:
                 self.roll_level = 0
                 self.ap_cond[0] = True
             else: self.ap_cond[0] = False
-            if abs(self.vertical_roll_level) < 0.01:
+            if abs(self.vertical_roll_level) < 0.1:
                 self.vertical_roll_level = 0
                 self.ap_cond[1] = True
             else: self.ap_cond[0] = False
-            if abs(50 - self.throttle) < 0.1:
+            if abs(50 - self.throttle) < 1:
                 self.throttle = 50
                 self.ap_cond[2] = True
             else: self.ap_cond[0] = False
             if self.ap_cond[0] and self.ap_cond[1] and self.ap_cond[2]:
                 self.ap_enabled = False
+                window.sounds['apdisconnect'].play()
 
         # check for almost-collision
         if (pygame.sprite.spritecollide(self, pygame.sprite.GroupSingle(
@@ -187,20 +230,26 @@ class Airplane(utils.ImprovedSprite):
         self.health -= damage
         if self.health <= 0:
             self.exit_code = 5
-        elif self.points >= POINTS_REQUIRED:
+        elif self.points >= POINTS_REQUIRED and self.altitude <= 0:
             self.exit_code = 1
+        elif self.points >= POINTS_REQUIRED:
+            window.status = ["All objectives found!",
+                    "Return to ground level."]
+            window.ignore_warnings = 2
 
         # position-related exit
         if self.altitude > MAX_ALTITUDE:
             self.exit_code = 6
-        elif self.altitude <= 0:
+        elif self.altitude <= 0 and self.total_vertical_velocity < -20:
             self.exit_code = 3
+        elif self.altitude <= 0 and self.total_vertical_velocity >= -20:
+            self.altitude = 0
         elif not window.airspace.in_bounds(self):
             self.exit_code = 4
 
     # Function that approximates the 5, 10, 20, 30 roll of Slight Fimulator 1.0
-    get_roll = lambda s, r: (35/198.0) * r**3 + (470/99.0) * r
-    get_vert_hd = lambda s, r: 10*r
+    get_roll = lambda s, r: (35/198) * r**3 + (470/99) * r
+    get_pitch = lambda s, r: 10*r
 
 
 class Objective(utils.ImprovedSprite):
@@ -219,9 +268,9 @@ class Objective(utils.ImprovedSprite):
 
         self.upos = list(self.rect.center[:])
         self.upos[0] -= airspace_dim[0] / 2
-        self.upos[0] *= (2000.0/airspace_dim[0])
+        self.upos[0] *= (AIRSPACE_DIM/airspace_dim[0])
         self.upos[1] -= airspace_dim[1] / 2
-        self.upos[1] *= (2000.0/airspace_dim[1])
+        self.upos[1] *= (AIRSPACE_DIM/airspace_dim[1])
 
     def draw(self, screen, airspace_x, airspace_y=None):
         """Draws the objective."""
@@ -234,8 +283,8 @@ class Objective(utils.ImprovedSprite):
     def update(self, window):
         """Updates the objective."""
         self.upos = list(self.rect.center[:])
-        self.upos[0] *= (1000.0/window.airspace.width)
-        self.upos[1] *= (1000.0/window.airspace.height)
+        self.upos[0] *= (AIRSPACE_DIM/window.airspace.width)
+        self.upos[1] *= (AIRSPACE_DIM/window.airspace.height)
 
 
 class Airspace(pygame.rect.Rect):
@@ -267,7 +316,7 @@ class Airspace(pygame.rect.Rect):
                     self.objectives, True, self.collided)
             for collision in collisions:
                 plane.points += 1
-                self.generate_objective(collision)
+                self.generate_objective(collision.image)
                 window.status = ["Fly to the objective."]
 
     def add_plane(self, plane):
@@ -276,32 +325,10 @@ class Airspace(pygame.rect.Rect):
         Creates a new airplane if an image is supplied."""
         if type(plane) != Airplane:
             plane = Airplane(plane, self.width/2, self.height/2,
-                    START_ALTITUDE, airspace_dim=self.size)
+                    0, airspace_dim=self.size)
         self.planes.add(plane)
 
-    def generate_objective(self, prev_objective):
-        """Generates an objective."""
-        objective = Objective(prev_objective.image, airspace_dim=self.size)
-        # no collide, correct coords
-        objective_correct = [False, False]
-        while objective_correct != [True, True]:
-            objective_correct = [False, False]
-            # generate objective
-            objective.rect.centerx = random.randint(0, self.width)
-            objective.rect.centery = random.randint(0, self.height)
-            objective.altitude = (prev_objective.altitude
-                    + random.randint(-150, 150))
-            if objective.altitude > 6000: objective.altitude = 8000
-            elif objective.altitude < 1000: objective.altitude = 1000
-            # test for collision
-            if not pygame.sprite.spritecollide(objective, self.planes,
-                    False, self.collided):
-                objective_correct[0] = True
-            if self.in_bounds(objective):
-                objective_correct[1] = True
-        self.objectives.add(objective)
-
-    def generate_initial_objective(self, image):
+    def generate_objective(self, image):
         """Generates an objective."""
         objective = Objective(image, airspace_dim=self.size)
         # no collide, correct coords
@@ -311,7 +338,7 @@ class Airspace(pygame.rect.Rect):
             # generate objective
             objective.rect.centerx = random.randint(0, self.width)
             objective.rect.centery = random.randint(0, self.height)
-            objective.altitude = random.randint(2000, 2500)
+            objective.altitude = random.randint(MIN_OBJ_ALT, MAX_ALTITUDE)
             # test for collision
             if not pygame.sprite.spritecollide(objective, self.planes,
                     False, self.collided):
@@ -372,11 +399,18 @@ Your score was %i.",
     ]
     def __init__(self, size=DEFAULT_SIZE):
         """Initializes the instance. Does not start the game."""
+        # Finds a folder if possible, otherwise tries a zip archive
+        if "resources" in os.listdir(PATH):
+            resources_path = "%s/resources" % PATH
+        elif "resources.zip" in os.listdir(PATH):
+            resources_path = "%s/resources.zip" % PATH
+        else: raise Exception("No resources found!")
         super(GameWindow, self).__init__(
-                resources_path="%s/resources.zip" % PATH,
+                resources_path=resources_path,
                 title="Slight Fimulator v%s" % __version__,
                 icontitle="Slight Fimulator",
                 size=size, bg=utils.Game.BG_PRESETS['bg-color'])
+        self.max_fps = 60
         self.prev_size = self.size
 
     # -------------------------------------------------------------------------
@@ -403,11 +437,12 @@ Your score was %i.",
         self.airspace.add_plane(self.images['navmarker'])
         self.planes = self.airspace.planes # Another name for the same object
         self.objectives = self.airspace.objectives
-        self.airspace.generate_initial_objective(
-                self.images['objectivemarker'])
+        self.airspace.generate_objective(self.images['objectivemarker'])
         for obj in self.objectives: self.closest_objective = obj
 
         self.stage = 0
+        self.paused = 0
+        self.ignore_warnings = 1
         self.status = ["Fly to the objective."]
         self.exit_code = 0
         self.warnings = {
@@ -417,6 +452,8 @@ Your score was %i.",
             "pullup": False,
             "pulluploop": False,
             "pullup-toggle": False,
+            "pulluploop2": False,
+            "pullup-toggle2": False,
             "dontsink": False,
             "dontsinkloop": False,
             "dontsink-toggle": False,
@@ -427,6 +464,7 @@ Your score was %i.",
         }
 
         self.output_log = True
+        self.startup_time = time.time()
         self.previous_time = time.time()
         self.time = time.time()
         self.tick = 0
@@ -435,13 +473,15 @@ Your score was %i.",
         pygame.time.set_timer(self.event_log, 5000)
         self.event_warn = pygame.USEREVENT + 1
         pygame.time.set_timer(self.event_warn, 1000)
+        self.event_toggletext = pygame.USEREVENT + 2
+        pygame.time.set_timer(self.event_toggletext, 333)
 
     def set_image_sizes(self):
         """Sets up the images."""
         for image_name in self.images:
             x, y = self.images[image_name].get_rect().size
-            x *= (self.size[0] / float(self.DEFAULT_SIZE[0]))
-            y *= (self.size[1] / float(self.DEFAULT_SIZE[1]))
+            x *= (self.size[0] / self.DEFAULT_SIZE[0])
+            y *= (self.size[1] / self.DEFAULT_SIZE[1])
             x = int(x); y = int(y)
             self.images[image_name] = pygame.transform.scale(
                     self.images[image_name], (x, y))
@@ -451,22 +491,22 @@ Your score was %i.",
         self.log_filepath = "%s/logs/%s.log" % (PATH, datetime.datetime.now())
         self.log_file = open(self.log_filepath, 'wt')
         output = []
-        output.append("TIME\t\t")
+        output.append("TIME\t\t\t")
         for plane_id in range(len(self.planes)):
             output.append("PLN-%i\t\t\t\t\t\t\t\t\t\t\t\t\t\t" % plane_id)
         for objective_id in range(len(self.objectives)):
             output.append("OBJ-%i\t\t\t" % objective_id)
-        output.append("\nTICK:\tDUR:\t")
+        output.append("\nSEC:\tTICK:\tDUR:\t")
         for plane_id in range(len(self.planes)):
             output.append(
 "X:\tY:\tALT:\tSPD:\tACCEL:\tVSPD:\tTHRTL:\t\
-HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
+HDG:\tPITCH:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         for objective_id in range(len(self.objectives)):
             output.append("X:\tY:\tALT:\t")
         self.log_file.write(''.join(output))
         self.log_file.write('\n')
         if self.output_log:
-            print('======RESTART LOG======')
+            print('====== START LOG ======')
             print(''.join(output))
         self.log_file.close()
 
@@ -490,8 +530,8 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         """Sets up the images."""
         for image_name in self.images:
             x, y = self.images[image_name].get_rect().size
-            x *= (self.size[0] / float(self.prev_size[0]))
-            y *= (self.size[1] / float(self.prev_size[1]))
+            x *= (self.size[0] / self.prev_size[0])
+            y *= (self.size[1] / self.prev_size[1])
             x = int(x); y = int(y)
             self.images[image_name] = pygame.transform.scale(
                     self.images[image_name], (x, y))
@@ -516,7 +556,7 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         attitude_tape_rect = attitude_tape.get_rect()
         attitude_tape_rect.center = (self.size[0]*7/32,
                 self.size[1]*9/24)
-        offset_y = self.size[1]*3/160*plane.vertical_roll_level
+        offset_y = self.size[1]*3/1600*plane.pitch
         offset_x = math.tan(math.radians(plane.roll)) * offset_y
         attitude_tape_rect.x += offset_x
         attitude_tape_rect.y += offset_y
@@ -541,13 +581,13 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
                 self.colors['black'], self.colors['panel'])
         
         # NAV text
-        self.draw_text("PLANE LOCATION:",
+        self.draw_text("PLANE LOCATION",
                 self.size[0]*29/64, self.size[1]/16,
                 color_id='white', mode='topleft')
-        self.draw_text("X: %.2f KM" % (plane.upos[0] / 10.0),
+        self.draw_text("X: %.2f" % (plane.upos[0] / 1000),
                 self.size[0]*29/64, self.size[1]/12,
                 color_id='white', mode='topleft')
-        self.draw_text("Y: %.2f KM" % (plane.upos[1] / 10.0),
+        self.draw_text("Y: %.2f" % (plane.upos[1] / 1000),
                 self.size[0]*29/64, self.size[1]*5/48,
                 color_id='white', mode='topleft')
         self.draw_text("ALT: %i M" % plane.altitude,
@@ -556,19 +596,19 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         self.draw_text("HEADING: %.1f" % plane.heading,
                 self.size[0]*91/128, self.size[1]/16,
                 color_id='white', mode='midtop')
-        self.draw_text("ANGLE: %.1f" % plane.vertical_heading,
+        self.draw_text("PITCH: %.1f" % plane.pitch,
                 self.size[0]*91/128, self.size[1]/12,
                 color_id='white', mode='midtop')
         self.draw_text("SCORE: %i" % plane.points,
                 self.size[0]*91/128, self.size[1]*5/48,
                 color_id='white', mode='midtop')
-        self.draw_text("OBJECTIVE LOCATION:",
+        self.draw_text("OBJECTIVE LOCATION",
                 self.size[0]*31/32, self.size[1]/16,
                 color_id='white', mode='topright')
-        self.draw_text("X: %.2f KM" % (closest_objective.upos[0] / 10.0),
+        self.draw_text("X: %.2f" % (closest_objective.upos[0] / 1000),
                 self.size[0]*31/32, self.size[1]/12,
                 color_id='white', mode='topright')
-        self.draw_text("Y: %.2f KM" % (closest_objective.upos[1] / 10.0),
+        self.draw_text("Y: %.2f" % (closest_objective.upos[1] / 1000),
                 self.size[0]*31/32, self.size[1]*5/48,
                 color_id='white', mode='topright')
         self.draw_text("ALT: %i M" % closest_objective.altitude,
@@ -582,61 +622,67 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         self.draw_text("%.1f%%" % plane.throttle,
                 self.size[0]*3/128, self.size[1]*13/48,
                 color_id='white', mode='topleft')
+        self.draw_text("GRAVITY",
+                self.size[0]*3/128, self.size[1]*17/48,
+                color_id='white', mode='topleft')
+        self.draw_text("%.1f KM/H" % (-plane.gravity * 3.6),
+                self.size[0]*3/128, self.size[1]*3/8,
+                color_id='white', mode='topleft')
+        self.draw_text("DAMAGE",
+                self.size[0]*3/128, self.size[1]*11/24,
+                color_id='white', mode='topleft')
+        self.draw_text("%.1f%%" % (100 - plane.health),
+                self.size[0]*3/128, self.size[1]*23/48,
+                color_id='white', mode='topleft')
         self.draw_text("SPEED",
                 self.size[0]*5/16, self.size[1]/4,
                 color_id='white', mode='topleft')
         self.draw_text("%.1f KM/H" % (plane.speed * 3.6),
                 self.size[0]*5/16, self.size[1]*13/48,
                 color_id='white', mode='topleft')
-        self.draw_text("HORIZ. SPD",
+        self.draw_text("HORIZ SPD",
                 self.size[0]*5/16, self.size[1]*17/48,
                 color_id='white', mode='topleft')
         self.draw_text("%.1f KM/H" % (plane.horizontal_speed * 3.6),
                 self.size[0]*5/16, self.size[1]*3/8,
                 color_id='white', mode='topleft')
-        self.draw_text("VERT. SPD",
+        self.draw_text("VERT SPD",
                 self.size[0]*5/16, self.size[1]*11/24,
                 color_id='white', mode='topleft')
         self.draw_text("%.1f KM/H" % (plane.vertical_velocity * 3.6),
                 self.size[0]*5/16, self.size[1]*23/48,
                 color_id='white', mode='topleft')
-        self.draw_text("DAMAGE:",
-                self.size[0]*3/128, self.size[1]*11/24,
-                color_id='white', mode='topleft')
-        self.draw_text("%.1f%%" % (100 - plane.health),
-                self.size[0]*3/128, self.size[1]*23/48,
-                color_id='white', mode='topleft')
 
         # throttle bar
         pygame.draw.rect(self.screen, self.colors['red'],
-                (self.size[0]*15/128, self.size[1]*71/192,
-                self.size[0]/64, self.size[1]*25/192))
+                (self.size[0]*15/128, self.size[1]*76/192,
+                self.size[0]/64, self.size[1]*5/192))
         pygame.draw.rect(self.screen, self.colors['white'],
-                (self.size[0]*15/128, self.size[1]*19/48,
-                self.size[0]/64, self.size[1]*5/48))
+                (self.size[0]*15/128, self.size[1]*81/192,
+                self.size[0]/64, self.size[1]*15/192))
         pygame.draw.rect(self.screen, self.colors['green'],
                 (self.size[0]*15/128,
-                float(self.size[1])/self.DEFAULT_SIZE[1]*(480-plane.throttle),
+                self.size[1]/self.DEFAULT_SIZE[1]*(480-plane.throttle),
                 self.size[0]/64,
-                float(self.size[1])/self.DEFAULT_SIZE[1]*plane.throttle))
+                self.size[1]/self.DEFAULT_SIZE[1]*plane.throttle))
 
         # status
         for line_id in range(len(self.status)):
             self.draw_text(self.status[line_id],
-                    self.size[0]*5/256, self.size[1]*(21/32.0+1.0/24*line_id),
+                    self.size[0]*5/256, self.size[1]*(21/32+1/24*line_id),
                     font_id="large", color_id='white', mode='topleft')
 
         # warnings
-        if self.warnings["pullup"]:
+        if self.warnings["pullup"] and not self.ignore_warnings:
             self.screen.blit(self.images['msg_pullup'],
                     (self.size[0]*5/32, self.size[1]*49/96))
-        elif self.warnings["terrain"]:
+        elif self.warnings["terrain"] and not self.ignore_warnings:
             self.screen.blit(self.images['msg_warning'],
                     (self.size[0]*187/1280, self.size[1]*7/40))
         elif self.warnings["stall"]:
             self.screen.blit(self.images['msg_stall'],
                     (self.size[0]*33/1280, self.size[1]*491/960))
-        elif self.warnings["dontsink"]:
+        elif self.warnings["dontsink"] and not self.ignore_warnings:
             self.screen.blit(self.images['msg_dontsink'],
                     (self.size[0]*19/80, self.size[1]*109/192))
         elif self.warnings["bankangle"]:
@@ -648,11 +694,9 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         if not plane.ap_enabled:
             self.screen.blit(self.images['msg_apdisconnect'],
                     (self.size[0]*7/64, self.size[1]*11/96))
-            self.status = ["Autopilot disengaged"]
         else:
             self.screen.blit(self.images['msg_apengaged'],
                     (self.size[0]*17/128, self.size[1]*11/96))
-            self.status = ["Autopilot engaged..."]
 
     def control_plane(self):
         """Allows you to control the plane."""
@@ -661,45 +705,45 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         if not plane.ap_enabled:
             keys = pygame.key.get_pressed()
             if keys[pygame.K_LEFT]:
-                plane.roll_level -= (1.0 / self.fps)
+                plane.roll_level -= (1 / self.fps)
                 if plane.roll_level < -4: plane.roll_level = -4
             elif keys[pygame.K_RIGHT]:
-                plane.roll_level += (1.0 / self.fps)
+                plane.roll_level += (1 / self.fps)
                 if plane.roll_level > 4: plane.roll_level = 4
             if keys[pygame.K_UP]:
-                plane.vertical_roll_level -= (1.0 / self.fps)
+                plane.vertical_roll_level -= (1 / self.fps)
                 if plane.vertical_roll_level < -4:
                     plane.vertical_roll_level = -4
             elif keys[pygame.K_DOWN]:
-                plane.vertical_roll_level += (1.0 / self.fps)
+                plane.vertical_roll_level += (1 / self.fps)
                 if plane.vertical_roll_level > 4:
                     plane.vertical_roll_level = 4
             if keys[pygame.K_F2]:
-                plane.throttle -= (4.0 / self.fps)
+                plane.throttle -= (4 / self.fps)
                 if plane.throttle < 0: plane.throttle = 0
             elif keys[pygame.K_F4]:
-                plane.throttle += (4.0 / self.fps)
-                if plane.throttle > 125: plane.throttle = 125
+                plane.throttle += (4 / self.fps)
+                if plane.throttle > 100: plane.throttle = 100
 
             for event in self.events:
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_F1: plane.throttle = 0
-                    elif event.key == pygame.K_F3: plane.throttle = 50
-                    elif event.key == pygame.K_F5: plane.throttle = 100
+                    elif event.key == pygame.K_F3: plane.throttle = 25
+                    elif event.key == pygame.K_F5: plane.throttle = 75
                     elif event.key == pygame.K_z: plane.ap_enabled = True
 
     def run_warnings(self):
         """Runs warnings."""
-        if self.warnings["pullup"]:
+        if self.warnings["pullup"] and not self.ignore_warnings:
             self.sounds['pullup'].play()
             self.warnings["pullup"] = False
-        elif self.warnings["terrain"]:
+        elif self.warnings["terrain"] and not self.ignore_warnings:
             self.sounds['terrain'].play()
             self.warnings["terrain"] = False
         elif self.warnings["stall"]:
             self.sounds['stall'].play()
             self.warnings["stall"] = False
-        elif self.warnings["dontsink"]:
+        elif self.warnings["dontsink"] and not self.ignore_warnings:
             self.sounds['dontsink'].play()
             self.warnings["dontsink"] = False
         if self.warnings["bankangle"]:
@@ -717,6 +761,12 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
                 self.warnings["pullup-toggle"] = False
             else:
                 self.warnings["pullup-toggle"] = True
+        if self.warnings["pulluploop2"]:
+            if self.warnings["pullup-toggle2"]:
+                self.warnings["pullup"] = True
+                self.warnings["pullup-toggle2"] = False
+            else:
+                self.warnings["pullup-toggle2"] = True
         if self.warnings["terrainloop"]:
             if self.warnings["terrain-toggle"]:
                 self.warnings["terrain"] = True
@@ -730,7 +780,7 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
             else:
                 self.warnings["dontsink-toggle"] = True
 
-    def log(self):
+    def log(self, text=None):
         """Writes in the log.
 
         The log logs every 5 seconds.  It records:
@@ -738,28 +788,31 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
          - How many milliseconds long that tick was
          - The coordinates, heading and score of all planes
          - The coordinates of all objectives
+        If the argument text is specified, logs that instead.
         """
         self.log_file = open(self.log_filepath, 'at')
-        output = []
-        output.append("%i\t%i\t" % (self.tick,
-                (self.time-self.previous_time) * 1000))
-        for plane_id in range(len(self.planes)):
-            for plane in self.planes:
-                if plane.id == plane_id: break
-            output.append(
-                    "%.1f\t%.1f\t%i\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\
-\t%.2f\t%.2f\t%.2f\t%i\t%.1f\t"
-                    % (plane.upos[0], plane.upos[1], plane.altitude,
-                    plane.speed, plane.acceleration,
-                    plane.vertical_velocity, plane.throttle,
-                    plane.heading, plane.vertical_heading, plane.roll_level,
-                    plane.roll, plane.vertical_roll_level, plane.points,
-                    100 - plane.health))
-        for objective_id in range(len(self.objectives)):
-            for objective in self.objectives:
-                if objective.id == objective_id: break
-            output.append("%.i\t%i\t%i\t" % (objective.upos[0],
-                    objective.upos[1], objective.altitude))
+        if text == None:
+            output = []
+            output.append("%.1f\t%i\t%i\t" % ((self.time-self.startup_time),
+                    self.tick, (self.time-self.previous_time) * 1000))
+            for plane_id in range(len(self.planes)):
+                for plane in self.planes:
+                    if plane.id == plane_id: break
+                output.append(
+                        "%.1f\t%.1f\t%i\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\
+    \t%.2f\t%.2f\t%.2f\t%i\t%.1f\t"
+                        % (plane.upos[0] / 1000, plane.upos[1] / 1000,
+                        plane.altitude, plane.speed, plane.acceleration,
+                        plane.vertical_velocity, plane.throttle,
+                        plane.heading, plane.pitch, plane.roll_level,
+                        plane.roll, plane.vertical_roll_level, plane.points,
+                        100 - plane.health))
+            for objective_id in range(len(self.objectives)):
+                for objective in self.objectives:
+                    if objective.id == objective_id: break
+                output.append("%i\t%i\t%i\t" % (objective.upos[0],
+                        objective.upos[1], objective.altitude))
+        else: output = text
         self.log_file.write(''.join(output))
         self.log_file.write('\n')
         if self.output_log: print(''.join(output))
@@ -824,15 +877,18 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
         """One iteration of the main loop."""
         for plane in self.planes:
             if plane.id == 0: break
-        self.control_plane()
-        self.airspace.update(self)
-        self.draw()
+        if not self.paused:
+            self.control_plane()
+            self.airspace.update(self)
+            self.draw()
+        elif self.paused != 1:
+            self.draw()
+            self.draw_text("PAUSED", self.airspace.center,
+                    color_id='white', font_id='large')
+        else:
+            self.draw()
         if plane.exit_code != 0:
-            self.log_file = open(self.log_filepath, 'at')
-            self.log_file.write("[!] Exited main loop with exitcode %i"
-                    % plane.exit_code)
-            self.log_file.close()
-            if self.output_log: print("[!] Exited main loop with exitcode %i"
+            self.log("[!] Exited main loop with exitcode %i"
                     % plane.exit_code)
             self.exit_title = self.EXIT_TITLES[plane.exit_code]
             self.exit_reason = self.EXIT_REASONS[plane.exit_code]
@@ -845,10 +901,22 @@ HDG:\tVHDG:\tCR:\tROLL:\tVCR:\tPTS:\tDMG:\t")
             if event.type == pygame.QUIT:
                 plane.exit_code = 2
                 self.events.remove(event)
-            elif event.type == self.event_log:
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    if self.paused:
+                        self.log("[!] Player unpaused")
+                        self.paused = 0
+                    else:
+                        self.log("[!] Player paused")
+                        self.paused = 1
+            elif event.type == self.event_log and not self.paused:
                 self.log()
             elif event.type == self.event_warn:
                 self.run_warnings()
+            elif event.type == self.event_toggletext:
+                if self.paused:
+                    self.paused += 1
+                    if self.paused >= 4: self.paused = 1
         self.get_tick_values()
     GAME_STAGES[1] = main_screen
     GAME_LOOPS[1] = game_loop_main
